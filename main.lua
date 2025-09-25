@@ -89,7 +89,7 @@ end
 function NPCScan:StartScanning()
     self.scanTimer = self:CreateAnimationGroup()
     local anim = self.scanTimer:CreateAnimation()
-    anim:SetDuration(NPCScanDB.scanInterval or 0.1)
+    anim:SetDuration(NPCScanDB.scanInterval or 0.5)
     
     self.scanTimer:SetScript("OnFinished", function()
         NPCScan:ScanForRares()
@@ -107,19 +107,6 @@ function NPCScan:IsRare(unit)
     local classification = UnitClassification(unit)
     if classification == "rare" or classification == "rareelite" or classification == "worldboss" then
         return true
-    end
-    
-    -- Check for elite with unusual level (often rares)
-    if classification == "elite" then
-        local level = UnitLevel(unit)
-        local playerLevel = UnitLevel("player")
-        -- Elites significantly higher level might be rare spawns
-        if level == -1 or (level - playerLevel) > 5 then
-            return true
-        end
-    end
-    
-    return false
 end
 
 function NPCScan:CheckUnit(unit)
