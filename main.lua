@@ -19,7 +19,7 @@ local defaults = {
     printEnabled = true,
     autoTarget = true,
     autoMark = true,
-    scanInterval = 0.1,
+    scanInterval = 0.5,
     dynamicScanRange = 100,
 }
 
