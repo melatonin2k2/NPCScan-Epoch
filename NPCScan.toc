@@ -1,6 +1,9 @@
+-- NPCScan.toc
 ## Interface: 30300
 ## Title: NPCScan
 ## Author: Melatonin
 ## Version: 1.0
+## Notes: Dynamically scans for rare NPCs using game indicators
+## SavedVariables: NPCScanDB
 
 main.lua
