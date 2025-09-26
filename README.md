@@ -15,8 +15,6 @@ Chat window messages with details (level, type, location, health)
 
 🛠 Automation Options
 
-Auto-target rare creatures
-
 Auto-mark with diamond {rt3} raid icon
 
 Configurable alerts (sound, flash, chat)
