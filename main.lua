@@ -690,5 +690,5 @@ local function UpdateMinimapButtonPosition()
 end
 UpdateMinimapButtonPosition()
 
-DEFAULT_CHAT_FRAME:AddMessage("|cFFFFD700NPCScan|r loaded - Dynamically scanning for rare creatures")
+DEFAULT_CHAT_FRAME:AddMessage("|cFFFFD700NPCScan|r loaded NPCScan")
 DEFAULT_CHAT_FRAME:AddMessage("|cFFFFD700NPCScan|r Use /npcscan for options or click the minimap button")
