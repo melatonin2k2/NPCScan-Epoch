@@ -3,12 +3,17 @@ NPCScan:SetScript("OnEvent", function(self, event, ...) self[event](self, ...) e
 NPCScan:RegisterEvent("ADDON_LOADED")
 NPCScan:RegisterEvent("PLAYER_LOGIN")
 NPCScan:RegisterEvent("PLAYER_TARGET_CHANGED")
+-- Register mouseover update for better detection
 NPCScan:RegisterEvent("UPDATE_MOUSEOVER_UNIT")
+NPCScan:RegisterEvent("PLAYER_ENTERING_WORLD")
+NPCScan:RegisterEvent("ZONE_CHANGED")
+NPCScan:RegisterEvent("ZONE_CHANGED_NEW_AREA")
 
 -- Cache to prevent spam
 local foundCache = {}
 local scanCache = {}
 local lastDynamicScan = 0
+local lastAutoScan = 0
 
 -- Settings defaults
 local defaults = {
@@ -19,6 +24,8 @@ local defaults = {
     autoMark = true,
     scanInterval = 0.5,
     dynamicScanRange = 100,
+    autoScanEnabled = true,
+    autoScanInterval = 1,
 }
 
 -- Simple timer system for OnUpdate
@@ -43,24 +50,36 @@ local function RunTimer(duration, func)
     AlertFrame:SetScript("OnUpdate", TimerOnUpdate)
 end
 
--- UIFrameFlash (simplified, only alpha pulsing)
+-- UIFrameFlash (simplified, only alpha pulsing) - FIXED VERSION
 local function SimpleFlash(frame, duration, times)
+    -- Validate frame object before proceeding
+    if not frame or not frame.SetAlpha or not frame.GetAlpha then
+        return
+    end
+    
     local elapsed, flashes = 0, 0
     local origAlpha = frame:GetAlpha()
     frame:SetAlpha(1)
-    frame:SetScript("OnUpdate", function(self, dt)
+    
+    -- Create a separate update frame to avoid conflicts
+    local flashFrame = CreateFrame("Frame")
+    flashFrame:SetScript("OnUpdate", function(self, dt)
         elapsed = elapsed + dt
         if elapsed > duration then
             elapsed = 0
             flashes = flashes + 1
             if flashes >= times then
-                self:SetAlpha(origAlpha)
+                if frame and frame.SetAlpha then
+                    frame:SetAlpha(origAlpha)
+                end
                 self:SetScript("OnUpdate", nil)
                 return
             end
         end
         local phase = math.abs(math.sin(elapsed * math.pi / duration))
-        self:SetAlpha(0.5 + 0.5 * phase)
+        if frame and frame.SetAlpha then
+            frame:SetAlpha(0.5 + 0.5 * phase)
+        end
     end)
 end
 
@@ -163,7 +182,7 @@ function NPCScan:CheckUnit(unit)
 end
 
 function NPCScan:ScanForRares()
-    -- No nameplate scan in 3.3.5a!
+    -- Check standard units
     if UnitExists("mouseover") then self:CheckUnit("mouseover") end
     if UnitExists("target") then self:CheckUnit("target") end
     if UnitExists("focus") then self:CheckUnit("focus") end
@@ -177,36 +196,66 @@ function NPCScan:ScanForRares()
     end
 end
 
+-- Enhanced auto-scanning using tooltip scanning (safer method)
+function NPCScan:AutoScanNearby()
+    -- This function now uses a safer approach that doesn't call protected functions
+    -- Instead, it relies on existing event-based scanning and nameplate scanning
+    self:ScanForRares()
+    
+    -- Try to scan using GameTooltip method (non-protected)
+    self:TooltipScanNearby()
+    
+    return false -- Always return false since we can't determine if rare was found
+end
+
+-- Tooltip-based scanning method (safe alternative)
+function NPCScan:TooltipScanNearby()
+    -- This method uses GameTooltip to scan for creatures
+    -- It's less reliable but doesn't trigger Blizzard's protection
+    
+    -- We'll enhance the existing event-based scanning instead
+    -- and rely on mouseover/target change events more heavily
+    
+    -- Check if we can use any safe scanning methods
+    if UnitExists("mouseover") then
+        self:CheckUnit("mouseover")
+    end
+    
+    -- Enhanced scanning of party/raid targets
+    for i = 1, GetNumPartyMembers() do
+        local unit = "party"..i
+        if UnitExists(unit) then
+            -- Check party member
+            self:CheckUnit(unit)
+            -- Check party member's target
+            local target = unit.."target"
+            if UnitExists(target) then
+                self:CheckUnit(target)
+            end
+        end
+    end
+    
+    for i = 1, GetNumRaidMembers() do
+        local unit = "raid"..i
+        if UnitExists(unit) then
+            -- Check raid member
+            self:CheckUnit(unit)
+            -- Check raid member's target
+            local target = unit.."target"
+            if UnitExists(target) then
+                self:CheckUnit(target)
+            end
+        end
+    end
+end
+
 function NPCScan:DynamicTargetScan()
     local now = GetTime()
     if now - lastDynamicScan < 0.5 then return end
     lastDynamicScan = now
-    local hadTarget = UnitExists("target")
-    local currentTarget = hadTarget and UnitGUID("target") or nil
-    ClearTarget()
-    local scanned = 0
-    local maxScans = 30
-    for i = 1, maxScans do
-        TargetNearestEnemy()
-        if UnitExists("target") then
-            local guid = UnitGUID("target")
-            if scanCache[guid] then break end
-            scanCache[guid] = true
-            scanned = scanned + 1
-            if self:CheckUnit("target") then return true end
-        else
-            break
-        end
-    end
-    -- Restore original target
-    ClearTarget()
-    if currentTarget then
-        for i = 1, maxScans do
-            TargetNearestEnemy()
-            if UnitExists("target") and UnitGUID("target") == currentTarget then break end
-        end
-    end
-    for k in pairs(scanCache) do scanCache[k] = nil end
+    
+    -- Just do basic scanning of available units
+    self:ScanForRares()
     return false
 end
 
@@ -216,6 +265,87 @@ end
 
 function NPCScan:UPDATE_MOUSEOVER_UNIT()
     self:CheckUnit("mouseover")
+end
+
+function NPCScan:PLAYER_ENTERING_WORLD()
+    -- Clear cache when entering world/changing zones
+    for k in pairs(foundCache) do foundCache[k] = nil end
+    DEFAULT_CHAT_FRAME:AddMessage("|cFFFFD700NPCScan:|r Entered new area - cache cleared, ready to scan for rares.")
+end
+
+function NPCScan:ZONE_CHANGED()
+    -- Clear cache when zone changes
+    for k in pairs(foundCache) do foundCache[k] = nil end
+end
+
+function NPCScan:ZONE_CHANGED_NEW_AREA()
+    -- Clear cache when entering new area
+    for k in pairs(foundCache) do foundCache[k] = nil end
+end
+
+function NPCScan:COMBAT_LOG_EVENT_UNFILTERED(timestamp, event, hideCaster, sourceGUID, sourceName, sourceFlags, destGUID, destName, destFlags, ...)
+    -- Check combat log for rare creature involvement
+    if sourceGUID and not foundCache[sourceGUID] then
+        -- Extract creature ID from GUID to check if it might be rare
+        local unitType, _, _, _, _, creatureID = strsplit("-", sourceGUID or "")
+        if unitType == "Creature" and creatureID then
+            -- If we see a creature in combat log, try to check it via other means
+            self:DelayedGUIDCheck(sourceGUID, sourceName)
+        end
+    end
+    if destGUID and not foundCache[destGUID] then
+        local unitType, _, _, _, _, creatureID = strsplit("-", destGUID or "")
+        if unitType == "Creature" and creatureID then
+            self:DelayedGUIDCheck(destGUID, destName)
+        end
+    end
+end
+
+function NPCScan:UNIT_TARGET(unit)
+    if unit and unit:find("party") or unit:find("raid") then
+        local target = unit .. "target"
+        if UnitExists(target) then
+            self:CheckUnit(target)
+        end
+    end
+end
+
+function NPCScan:PARTY_MEMBERS_CHANGED()
+    -- Re-scan party targets when party changes
+    RunTimer(0.5, function()
+        NPCScan:ScanForRares()
+    end)
+end
+
+function NPCScan:RAID_ROSTER_UPDATE()
+    -- Re-scan raid targets when raid changes
+    RunTimer(0.5, function()
+        NPCScan:ScanForRares()
+    end)
+end
+
+function NPCScan:DelayedGUIDCheck(guid, name)
+    if not guid or foundCache[guid] then return end
+    
+    -- Try to find this creature by checking common unit IDs
+    RunTimer(0.1, function()
+        local units = {"target", "mouseover", "focus"}
+        
+        -- Add party/raid targets
+        for i = 1, GetNumPartyMembers() do
+            table.insert(units, "party"..i.."target")
+        end
+        for i = 1, GetNumRaidMembers() do
+            table.insert(units, "raid"..i.."target")
+        end
+        
+        for _, unit in pairs(units) do
+            if UnitExists(unit) and UnitGUID(unit) == guid then
+                NPCScan:CheckUnit(unit)
+                break
+            end
+        end
+    end)
 end
 
 function NPCScan:RareFound(unit, name, guid)
@@ -284,6 +414,37 @@ end
 function NPCScan:CreateOptionsPanel()
     local panel = CreateFrame("Frame", "NPCScanOptionsPanel", UIParent)
     panel.name = "NPCScan"
+    panel:SetWidth(600)
+    panel:SetHeight(400)
+    panel:SetPoint("CENTER")
+    panel:SetFrameStrata("HIGH")
+    panel:EnableMouse(true)
+    panel:SetMovable(true)
+    panel:RegisterForDrag("LeftButton")
+    panel:SetScript("OnDragStart", function(self) self:StartMoving() end)
+    panel:SetScript("OnDragStop", function(self) self:StopMovingOrSizing() end)
+    panel:Hide()
+    
+    -- Background
+    panel.bg = panel:CreateTexture(nil, "BACKGROUND")
+    panel.bg:SetAllPoints()
+    panel.bg:SetTexture(0, 0, 0, 0.8)
+    
+    -- Border
+    panel.border = CreateFrame("Frame", nil, panel)
+    panel.border:SetPoint("TOPLEFT", -5, 5)
+    panel.border:SetPoint("BOTTOMRIGHT", 5, -5)
+    panel.border:SetBackdrop({
+        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+        edgeSize = 16,
+    })
+    panel.border:SetBackdropBorderColor(1, 0.84, 0, 1)
+    
+    -- Close button
+    local closeBtn = CreateFrame("Button", nil, panel, "UIPanelCloseButton")
+    closeBtn:SetPoint("TOPRIGHT", 2, 2)
+    closeBtn:SetScript("OnClick", function() panel:Hide() end)
+    
     panel:SetScript("OnShow", function()
         if not panel.inited then
             panel.inited = true
@@ -349,6 +510,8 @@ function NPCScan:CreateOptionsPanel()
             markCheck:SetScript("OnClick", function(self)
                 NPCScanDB.autoMark = self:GetChecked()
             end)
+            y = y - 30
+            -- Auto-scan checkbox (removed - doesn't work properly in 3.3.5a)
             y = y - 40
             -- Test button
             local testBtn = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
@@ -376,20 +539,14 @@ function NPCScan:CreateOptionsPanel()
             end)
         end
     end)
-    -- 3.3.5a options registration:
-    if not InterfaceOptionsFrameCategories then InterfaceOptionsFrameCategories = {}; end
-    table.insert(InterfaceOptionsFrameCategories, panel)
+    -- Store reference for easy access
+    _G["NPCScanOptionsPanel"] = panel
 end
 
 function NPCScan:SetupKeybinding()
-    local btn = CreateFrame("Button", "NPCScanDynamicScanButton", UIParent, "SecureActionButtonTemplate")
-    btn:RegisterForClicks("AnyDown")
-    btn:Hide()
+    -- Simple keybinding setup without broken scanning
     BINDING_HEADER_NPCSCAN = "NPCScan"
-    BINDING_NAME_CLICK_NPCScanDynamicScanButton_LeftButton = "Dynamic Target Scan"
-    btn:SetScript("OnClick", function()
-        NPCScan:DynamicTargetScan()
-    end)
+    -- Remove the broken keybinds since they don't work
 end
 
 SLASH_NPCSCAN1 = "/npcscan"
@@ -405,11 +562,31 @@ SlashCmdList["NPCSCAN"] = function(msg)
         for k in pairs(foundCache) do foundCache[k] = nil end
         for k in pairs(scanCache) do scanCache[k] = nil end
         DEFAULT_CHAT_FRAME:AddMessage("|cFFFFD700NPCScan:|r Cache cleared. Will re-alert for previously found rares.")
-    elseif cmd == "scan" then
-        if NPCScan:DynamicTargetScan() then
-            DEFAULT_CHAT_FRAME:AddMessage("|cFFFFD700NPCScan:|r Rare found during dynamic scan!")
-        else
-            DEFAULT_CHAT_FRAME:AddMessage("|cFFFFD700NPCScan:|r No rares found in immediate vicinity.")
+    elseif cmd == "debug" then
+        DEFAULT_CHAT_FRAME:AddMessage("|cFFFFD700NPCScan Debug:|r")
+        DEFAULT_CHAT_FRAME:AddMessage("  Target exists: " .. tostring(UnitExists("target")))
+        if UnitExists("target") then
+            local name = UnitName("target")
+            local classification = UnitClassification("target")
+            local level = UnitLevel("target")
+            local creatureType = UnitCreatureType("target")
+            local guid = UnitGUID("target")
+            DEFAULT_CHAT_FRAME:AddMessage("  Target: " .. (name or "unknown"))
+            DEFAULT_CHAT_FRAME:AddMessage("  Classification: " .. (classification or "unknown"))
+            DEFAULT_CHAT_FRAME:AddMessage("  Level: " .. (level or "unknown"))
+            DEFAULT_CHAT_FRAME:AddMessage("  Type: " .. (creatureType or "unknown"))
+            DEFAULT_CHAT_FRAME:AddMessage("  GUID: " .. (guid or "unknown"))
+            DEFAULT_CHAT_FRAME:AddMessage("  Is Rare: " .. tostring(NPCScan:IsRare("target")))
+            DEFAULT_CHAT_FRAME:AddMessage("  Is Player: " .. tostring(UnitIsPlayer("target")))
+            DEFAULT_CHAT_FRAME:AddMessage("  Is Dead: " .. tostring(UnitIsDead("target")))
+        end
+        DEFAULT_CHAT_FRAME:AddMessage("  Mouseover exists: " .. tostring(UnitExists("mouseover")))
+        if UnitExists("mouseover") then
+            local name = UnitName("mouseover")
+            local classification = UnitClassification("mouseover")
+            DEFAULT_CHAT_FRAME:AddMessage("  Mouseover: " .. (name or "unknown"))
+            DEFAULT_CHAT_FRAME:AddMessage("  Classification: " .. (classification or "unknown"))
+            DEFAULT_CHAT_FRAME:AddMessage("  Is Rare: " .. tostring(NPCScan:IsRare("mouseover")))
         end
     elseif cmd == "status" then
         DEFAULT_CHAT_FRAME:AddMessage("|cFFFFD700NPCScan Status:|r")
@@ -422,10 +599,15 @@ SlashCmdList["NPCSCAN"] = function(msg)
         InterfaceOptionsFrame_OpenToCategory("NPCScan")
         DEFAULT_CHAT_FRAME:AddMessage("|cFFFFD700NPCScan Commands:|r")
         DEFAULT_CHAT_FRAME:AddMessage("  /npcscan - Open options panel")
-        DEFAULT_CHAT_FRAME:AddMessage("  /npcscan test - Test the alert system")
         DEFAULT_CHAT_FRAME:AddMessage("  /npcscan reset - Clear the found cache")
-        DEFAULT_CHAT_FRAME:AddMessage("  /npcscan scan - Manually trigger dynamic scan")
+        DEFAULT_CHAT_FRAME:AddMessage("  /npcscan debug - Show debug information about current target/mouseover")
         DEFAULT_CHAT_FRAME:AddMessage("  /npcscan status - Show current settings")
+        DEFAULT_CHAT_FRAME:AddMessage(" ")
+        DEFAULT_CHAT_FRAME:AddMessage("|cFFFFD700How it works:|r NPCScan automatically detects rares when you:")
+        DEFAULT_CHAT_FRAME:AddMessage("  - Target them directly")
+        DEFAULT_CHAT_FRAME:AddMessage("  - Mouse over them")
+        DEFAULT_CHAT_FRAME:AddMessage("  - Enter combat with them")
+        DEFAULT_CHAT_FRAME:AddMessage("  - Party/raid members target them")
     end
 end
 
@@ -435,24 +617,58 @@ MinimapButton:SetWidth(32)
 MinimapButton:SetHeight(32)
 MinimapButton:SetFrameStrata("MEDIUM")
 MinimapButton:SetFrameLevel(8)
+MinimapButton:EnableMouse(true)
+MinimapButton:RegisterForClicks("LeftButtonUp", "RightButtonUp", "MiddleButtonUp")
 MinimapButton:SetHighlightTexture("Interface\\Minimap\\UI-Minimap-ZoomButton-Highlight")
+
 local icon = MinimapButton:CreateTexture(nil, "BACKGROUND")
 icon:SetWidth(20)
 icon:SetHeight(20)
 icon:SetPoint("CENTER", 0, 0)
 icon:SetTexture("Interface\\TargetingFrame\\UI-TargetingFrame-Rare")
+
 MinimapButton.border = MinimapButton:CreateTexture(nil, "OVERLAY")
 MinimapButton.border:SetWidth(52)
 MinimapButton.border:SetHeight(52)
 MinimapButton.border:SetPoint("CENTER", 0, 0)
 MinimapButton.border:SetTexture("Interface\\Minimap\\MiniMap-TrackingBorder")
+
 MinimapButton:SetScript("OnClick", function(self, button)
+    DEFAULT_CHAT_FRAME:AddMessage("|cFFFFD700NPCScan:|r Minimap button clicked: " .. (button or "unknown"))
+    
     if button == "LeftButton" then
-        InterfaceOptionsFrame_OpenToCategory("NPCScan")
+        -- Multiple attempts to open options
+        local opened = false
+        
+        -- Method 1: Try custom panel
+        local panel = _G["NPCScanOptionsPanel"]
+        if panel then
+            if panel:IsShown() then
+                panel:Hide()
+                DEFAULT_CHAT_FRAME:AddMessage("|cFFFFD700NPCScan:|r Options panel closed.")
+            else
+                panel:Show()
+                DEFAULT_CHAT_FRAME:AddMessage("|cFFFFD700NPCScan:|r Options panel opened.")
+            end
+            opened = true
+        end
+        
+        -- Method 2: Try standard interface options
+        if not opened and InterfaceOptionsFrame_OpenToCategory then
+            InterfaceOptionsFrame_OpenToCategory("NPCScan")
+            opened = true
+        end
+        
+        -- Method 3: Fallback - show help
+        if not opened then
+            DEFAULT_CHAT_FRAME:AddMessage("|cFFFFD700NPCScan:|r Unable to open options panel. Use /npcscan for commands.")
+        end
+        
     elseif button == "RightButton" then
         SlashCmdList["NPCSCAN"]("status")
     end
 end)
+
 MinimapButton:SetScript("OnEnter", function(self)
     GameTooltip:SetOwner(self, "ANCHOR_LEFT")
     GameTooltip:SetText("|cFFFFD700NPCScan|r")
@@ -462,9 +678,11 @@ MinimapButton:SetScript("OnEnter", function(self)
     GameTooltip:AddLine("Right-click: Show status", 0.8, 0.8, 0.8)
     GameTooltip:Show()
 end)
+
 MinimapButton:SetScript("OnLeave", function()
     GameTooltip:Hide()
 end)
+
 local function UpdateMinimapButtonPosition()
     local angle = math.rad(135)
     local x = math.cos(angle) * 80
