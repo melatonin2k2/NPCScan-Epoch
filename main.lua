@@ -196,25 +196,10 @@ function NPCScan:ScanForRares()
     end
 end
 
--- Enhanced auto-scanning using tooltip scanning (safer method)
-function NPCScan:AutoScanNearby()
-    -- This function now uses a safer approach that doesn't call protected functions
-    -- Instead, it relies on existing event-based scanning and nameplate scanning
-    self:ScanForRares()
-    
-    -- Try to scan using GameTooltip method (non-protected)
-    self:TooltipScanNearby()
-    
-    return false -- Always return false since we can't determine if rare was found
-end
-
 -- Tooltip-based scanning method (safe alternative)
 function NPCScan:TooltipScanNearby()
     -- This method uses GameTooltip to scan for creatures
     -- It's less reliable but doesn't trigger Blizzard's protection
-    
-    -- We'll enhance the existing event-based scanning instead
-    -- and rely on mouseover/target change events more heavily
     
     -- Check if we can use any safe scanning methods
     if UnitExists("mouseover") then
