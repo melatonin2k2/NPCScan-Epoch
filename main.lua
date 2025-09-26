@@ -11,9 +11,6 @@ NPCScan:RegisterEvent("ZONE_CHANGED_NEW_AREA")
 
 -- Cache to prevent spam
 local foundCache = {}
-local scanCache = {}
-local lastDynamicScan = 0
-local lastAutoScan = 0
 
 -- Settings defaults
 local defaults = {
@@ -23,9 +20,6 @@ local defaults = {
     autoTarget = true,
     autoMark = true,
     scanInterval = 0.5,
-    dynamicScanRange = 100,
-    autoScanEnabled = true,
-    autoScanInterval = 1,
 }
 
 -- Simple timer system for OnUpdate
@@ -182,24 +176,55 @@ function NPCScan:CheckUnit(unit)
 end
 
 function NPCScan:ScanForRares()
-    -- Check standard units
+    -- Only check units that already exist - NO targeting calls
     if UnitExists("mouseover") then self:CheckUnit("mouseover") end
     if UnitExists("target") then self:CheckUnit("target") end
     if UnitExists("focus") then self:CheckUnit("focus") end
+    
+    -- Check party members and their targets
     for i = 1, GetNumPartyMembers() do
-        local unit = "party"..i.."target"
-        if UnitExists(unit) then self:CheckUnit(unit) end
+        local unit = "party"..i
+        if UnitExists(unit) then
+            self:CheckUnit(unit)
+        end
+        local target = unit.."target"
+        if UnitExists(target) then
+            self:CheckUnit(target)
+        end
     end
+    
+    -- Check raid members and their targets  
     for i = 1, GetNumRaidMembers() do
-        local unit = "raid"..i.."target"
-        if UnitExists(unit) then self:CheckUnit(unit) end
+        local unit = "raid"..i
+        if UnitExists(unit) then
+            self:CheckUnit(unit)
+        end
+        local target = unit.."target"
+        if UnitExists(target) then
+            self:CheckUnit(target)
+        end
     end
+end
+
+-- Enhanced auto-scanning using tooltip scanning (safer method)
+function NPCScan:AutoScanNearby()
+    -- This function now uses a safer approach that doesn't call protected functions
+    -- Instead, it relies on existing event-based scanning and nameplate scanning
+    self:ScanForRares()
+    
+    -- Try to scan using GameTooltip method (non-protected)
+    self:TooltipScanNearby()
+    
+    return false -- Always return false since we can't determine if rare was found
 end
 
 -- Tooltip-based scanning method (safe alternative)
 function NPCScan:TooltipScanNearby()
     -- This method uses GameTooltip to scan for creatures
     -- It's less reliable but doesn't trigger Blizzard's protection
+    
+    -- We'll enhance the existing event-based scanning instead
+    -- and rely on mouseover/target change events more heavily
     
     -- Check if we can use any safe scanning methods
     if UnitExists("mouseover") then
@@ -234,15 +259,7 @@ function NPCScan:TooltipScanNearby()
     end
 end
 
-function NPCScan:DynamicTargetScan()
-    local now = GetTime()
-    if now - lastDynamicScan < 0.5 then return end
-    lastDynamicScan = now
-    
-    -- Just do basic scanning of available units
-    self:ScanForRares()
-    return false
-end
+
 
 function NPCScan:PLAYER_TARGET_CHANGED()
     self:CheckUnit("target")
@@ -269,12 +286,11 @@ function NPCScan:ZONE_CHANGED_NEW_AREA()
 end
 
 function NPCScan:COMBAT_LOG_EVENT_UNFILTERED(timestamp, event, hideCaster, sourceGUID, sourceName, sourceFlags, destGUID, destName, destFlags, ...)
-    -- Check combat log for rare creature involvement
+    -- Check combat log for rare creature involvement (passive detection only)
     if sourceGUID and not foundCache[sourceGUID] then
-        -- Extract creature ID from GUID to check if it might be rare
         local unitType, _, _, _, _, creatureID = strsplit("-", sourceGUID or "")
         if unitType == "Creature" and creatureID then
-            -- If we see a creature in combat log, try to check it via other means
+            -- Only check existing targetable units, don't try to force targeting
             self:DelayedGUIDCheck(sourceGUID, sourceName)
         end
     end
@@ -296,14 +312,14 @@ function NPCScan:UNIT_TARGET(unit)
 end
 
 function NPCScan:PARTY_MEMBERS_CHANGED()
-    -- Re-scan party targets when party changes
+    -- Just do a basic rescan of existing units
     RunTimer(0.5, function()
         NPCScan:ScanForRares()
     end)
 end
 
 function NPCScan:RAID_ROSTER_UPDATE()
-    -- Re-scan raid targets when raid changes
+    -- Just do a basic rescan of existing units
     RunTimer(0.5, function()
         NPCScan:ScanForRares()
     end)
@@ -312,11 +328,11 @@ end
 function NPCScan:DelayedGUIDCheck(guid, name)
     if not guid or foundCache[guid] then return end
     
-    -- Try to find this creature by checking common unit IDs
+    -- Only check units that are already available - NO targeting calls
     RunTimer(0.1, function()
         local units = {"target", "mouseover", "focus"}
         
-        -- Add party/raid targets
+        -- Add party/raid targets (but don't try to create new targets)
         for i = 1, GetNumPartyMembers() do
             table.insert(units, "party"..i.."target")
         end
@@ -324,6 +340,7 @@ function NPCScan:DelayedGUIDCheck(guid, name)
             table.insert(units, "raid"..i.."target")
         end
         
+        -- Only check units that already exist
         for _, unit in pairs(units) do
             if UnitExists(unit) and UnitGUID(unit) == guid then
                 NPCScan:CheckUnit(unit)
@@ -519,7 +536,6 @@ function NPCScan:CreateOptionsPanel()
             resetBtn:SetText("Reset Cache")
             resetBtn:SetScript("OnClick", function()
                 for k in pairs(foundCache) do foundCache[k] = nil end
-                for k in pairs(scanCache) do scanCache[k] = nil end
                 DEFAULT_CHAT_FRAME:AddMessage("|cFFFFD700NPCScan:|r Cache cleared. Will re-alert for previously found rares.")
             end)
         end
@@ -529,9 +545,8 @@ function NPCScan:CreateOptionsPanel()
 end
 
 function NPCScan:SetupKeybinding()
-    -- Simple keybinding setup without broken scanning
+    -- Keybinding setup (no protected functions)
     BINDING_HEADER_NPCSCAN = "NPCScan"
-    -- Remove the broken keybinds since they don't work
 end
 
 SLASH_NPCSCAN1 = "/npcscan"
@@ -545,7 +560,6 @@ SlashCmdList["NPCSCAN"] = function(msg)
         DEFAULT_CHAT_FRAME:AddMessage("|cFFFFD700NPCScan:|r Test alert triggered")
     elseif cmd == "reset" then
         for k in pairs(foundCache) do foundCache[k] = nil end
-        for k in pairs(scanCache) do scanCache[k] = nil end
         DEFAULT_CHAT_FRAME:AddMessage("|cFFFFD700NPCScan:|r Cache cleared. Will re-alert for previously found rares.")
     elseif cmd == "debug" then
         DEFAULT_CHAT_FRAME:AddMessage("|cFFFFD700NPCScan Debug:|r")
